@@ -16,8 +16,8 @@ def ussd():
     # =========================
     # MAIN MENU
     # =========================
-if text == "":
-    return """CON POP & SIP
+    if text == "":
+        return """CON POP & SIP
 3. Place Order
 4. Contact Us"""
     # =========================
@@ -60,14 +60,11 @@ Thank you for choosing Pop & Sip!"""
     # =========================
     if text in ["1*0", "2*0", "3*0"]:
         return """CON POP & SIP
-1. Popcorn
-2. Hibiscus Drink
 3. Place Order
 4. Contact Us"""
     # =========================================================
     # POPCORN ORDER
     # =========================================================
-    # Choose popcorn
     if text == "3*1":
         return """CON SELECT POPCORN
 1. Plain - GH¢5
@@ -104,7 +101,7 @@ Quantity: {quantity}
 Total: GH¢{total}
 Enter your full name:
 0. Back"""
-    # Popcorn custom quantity request
+    # Popcorn custom quantity
     if (
         len(parts) == 4
         and parts[0:2] == ["3", "1"]
@@ -139,7 +136,6 @@ Try again:"""
     # =========================================================
     # HIBISCUS ORDER
     # =========================================================
-    # Choose hibiscus quantity
     if text == "3*2":
         return """CON HIBISCUS DRINK
 GH¢5 per bottle
@@ -163,7 +159,7 @@ Quantity: {quantity} bottle(s)
 Total: GH¢{total}
 Enter your full name:
 0. Back"""
-    # Hibiscus custom quantity request
+    # Hibiscus custom quantity
     if (
         len(parts) == 3
         and parts[0:2] == ["3", "2"]
@@ -197,7 +193,6 @@ Try again:"""
     # =========================================================
     # POPCORN CUSTOMER NAME
     # =========================================================
-    # Preset popcorn name
     if (
         len(parts) == 5
         and parts[0:2] == ["3", "1"]
@@ -206,7 +201,7 @@ Try again:"""
         return """CON PHONE NUMBER
 Enter your phone number:
 0. Back"""
-    # Custom popcorn name
+    # Popcorn custom name
     if (
         len(parts) == 6
         and parts[0:2] == ["3", "1"]
@@ -218,7 +213,6 @@ Enter your phone number:
     # =========================================================
     # HIBISCUS CUSTOMER NAME
     # =========================================================
-    # Preset hibiscus name
     if (
         len(parts) == 4
         and parts[0:2] == ["3", "2"]
@@ -227,7 +221,7 @@ Enter your phone number:
         return """CON PHONE NUMBER
 Enter your phone number:
 0. Back"""
-    # Custom hibiscus name
+    # Hibiscus custom name
     if (
         len(parts) == 5
         and parts[0:2] == ["3", "2"]
@@ -239,7 +233,6 @@ Enter your phone number:
     # =========================================================
     # CONFIRMATION
     # =========================================================
-    # Popcorn preset/custom after phone number
     if (
         parts[0:2] == ["3", "1"]
         and (
@@ -252,7 +245,7 @@ Enter your phone number:
 1. Confirm Order
 2. Cancel Order
 0. Back"""
-    # Hibiscus preset/custom after phone number
+    # Hibiscus confirmation
     if (
         parts[0:2] == ["3", "2"]
         and (
