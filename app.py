@@ -1,38 +1,36 @@
-from flask import Flask, request, Response
+from flask import Flask, request, session, redirect, url_for
 import os
 import psycopg2
 from datetime import datetime
 
 app = Flask(__name__)
-
-# --------------------------------------------------
-# DATABASE
-# --------------------------------------------------
+app.secret_key = os.environ.get("SECRET_KEY", "pop-and-sip-secret")
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 
 
-def get_db():
-    if not DATABASE_URL:
-        raise Exception("DATABASE_URL is not set")
+# --------------------------------------------------
+# DATABASE
+# --------------------------------------------------
 
+def get_db():
     return psycopg2.connect(DATABASE_URL)
 
 
-def setup_database():
+def create_table():
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id SERIAL PRIMARY KEY,
-            order_number VARCHAR(30) UNIQUE NOT NULL,
-            customer_name TEXT NOT NULL,
-            phone TEXT NOT NULL,
-            product TEXT NOT NULL,
+            order_number VARCHAR(50) UNIQUE NOT NULL,
+            product VARCHAR(100) NOT NULL,
             quantity INTEGER NOT NULL,
-            total NUMERIC(10,2) NOT NULL,
+            total INTEGER NOT NULL,
+            customer_name VARCHAR(150) NOT NULL,
+            customer_phone VARCHAR(50) NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -42,37 +40,30 @@ def setup_database():
     conn.close()
 
 
-# --------------------------------------------------
-# SAVE ORDER
-# --------------------------------------------------
-
-def save_order(customer_name, phone, product, quantity, total):
+def save_order(product, quantity, total, customer_name, customer_phone):
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
-        INSERT INTO orders
-        (order_number, customer_name, phone, product, quantity, total)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        RETURNING id
-    """, (
-        "TEMP",
-        customer_name,
-        phone,
-        product,
-        quantity,
-        total
-    ))
+        SELECT COALESCE(MAX(id), 0) + 1
+        FROM orders
+    """)
 
-    order_id = cur.fetchone()[0]
-
-    order_number = f"PS-{order_id:05d}"
+    next_number = cur.fetchone()[0]
+    order_number = f"PS-{next_number:05d}"
 
     cur.execute("""
-        UPDATE orders
-        SET order_number = %s
-        WHERE id = %s
-    """, (order_number, order_id))
+        INSERT INTO orders
+        (order_number, product, quantity, total, customer_name, customer_phone)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """, (
+        order_number,
+        product,
+        quantity,
+        total,
+        customer_name,
+        customer_phone
+    ))
 
     conn.commit()
     cur.close()
@@ -89,6 +80,7 @@ def save_order(customer_name, phone, product, quantity, total):
 def ussd():
 
     text = request.form.get("text", "").strip()
+    session_id = request.form.get("sessionId", "")
 
     parts = text.split("*") if text else []
 
@@ -101,6 +93,7 @@ def ussd():
 1. Place Order
 2. Contact Us"""
 
+
     # --------------------------------------------------
     # CONTACT US
     # --------------------------------------------------
@@ -109,6 +102,7 @@ def ussd():
         return """END CONTACT US
 
 WhatsApp: 0595529279"""
+
 
     # --------------------------------------------------
     # MAIN MENU
@@ -120,6 +114,7 @@ WhatsApp: 0595529279"""
 2. Hibiscus Drink
 0. Back"""
 
+
     # --------------------------------------------------
     # BACK TO MAIN MENU
     # --------------------------------------------------
@@ -129,17 +124,18 @@ WhatsApp: 0595529279"""
 1. Place Order
 2. Contact Us"""
 
+
     # ==================================================
     # POPCORN
     # ==================================================
 
-    # Popcorn menu
     if parts == ["1", "1"]:
         return """CON SELECT POPCORN
 1. Plain - GH¢5
 2. Flavoured - GH¢10
 3. Assorted - GH¢25
 0. Back"""
+
 
     # Back from popcorn
     if parts == ["1", "1", "0"]:
@@ -148,8 +144,9 @@ WhatsApp: 0595529279"""
 2. Hibiscus Drink
 0. Back"""
 
+
     # --------------------------------------------------
-    # POPCORN PRODUCT SELECTED
+    # POPCORN PRODUCT
     # --------------------------------------------------
 
     if (
@@ -157,12 +154,14 @@ WhatsApp: 0595529279"""
         and parts[:2] == ["1", "1"]
         and parts[2] in ["1", "2", "3"]
     ):
+
         return """CON SELECT QUANTITY
 1. 1
 2. 2
 3. 3
 4. Choose Quantity
 0. Back"""
+
 
     # --------------------------------------------------
     # POPCORN QUANTITY BACK
@@ -174,11 +173,13 @@ WhatsApp: 0595529279"""
         and parts[2] in ["1", "2", "3"]
         and parts[3] == "0"
     ):
+
         return """CON SELECT POPCORN
 1. Plain - GH¢5
 2. Flavoured - GH¢10
 3. Assorted - GH¢25
 0. Back"""
+
 
     # --------------------------------------------------
     # POPCORN CUSTOM QUANTITY
@@ -190,79 +191,130 @@ WhatsApp: 0595529279"""
         and parts[2] in ["1", "2", "3"]
         and parts[3] == "4"
     ):
+
         return """CON CHOOSE QUANTITY
 Enter the number of items you want.
 Example: 7
 0. Back"""
 
+
     # --------------------------------------------------
-    # POPCORN CUSTOMER NAME
+    # POPCORN CUSTOM QUANTITY ENTERED
     # --------------------------------------------------
 
-    if len(parts) == 5 and parts[:2] == ["1", "1"]:
+    if (
+        len(parts) == 5
+        and parts[:2] == ["1", "1"]
+        and parts[2] in ["1", "2", "3"]
+        and parts[3] == "4"
+    ):
 
-        product_choice = parts[2]
+        try:
+            quantity = int(parts[4])
 
-        if product_choice not in ["1", "2", "3"]:
-            return """END Invalid popcorn selection."""
-
-        # Preset quantity
-        if parts[3] in ["1", "2", "3"]:
-            return """CON CUSTOMER DETAILS
-Enter your full name:"""
-
-        # Custom quantity
-        if parts[3] == "4":
-            try:
-                quantity = int(parts[4])
-
-                if quantity <= 0:
-                    return """CON CHOOSE QUANTITY
+            if quantity <= 0:
+                return """CON CHOOSE QUANTITY
 Enter a number greater than 0.
 Example: 7"""
 
-            except ValueError:
-                return """CON CHOOSE QUANTITY
+        except ValueError:
+            return """CON CHOOSE QUANTITY
 Please enter a valid number.
 Example: 7"""
 
-            return """CON CUSTOMER DETAILS
+        return """CON CUSTOMER DETAILS
 Enter your full name:"""
 
+
     # --------------------------------------------------
-    # POPCORN PHONE
+    # POPCORN CUSTOM NAME
     # --------------------------------------------------
 
-    if len(parts) == 6 and parts[:2] == ["1", "1"]:
+    if (
+        len(parts) == 6
+        and parts[:2] == ["1", "1"]
+        and parts[2] in ["1", "2", "3"]
+        and parts[3] == "4"
+    ):
 
         return """CON CUSTOMER DETAILS
 Enter your phone number:"""
 
+
     # --------------------------------------------------
-    # POPCORN CONFIRMATION
+    # POPCORN CUSTOM PHONE
     # --------------------------------------------------
 
-    if len(parts) == 7 and parts[:2] == ["1", "1"]:
+    if (
+        len(parts) == 7
+        and parts[:2] == ["1", "1"]
+        and parts[2] in ["1", "2", "3"]
+        and parts[3] == "4"
+    ):
 
         return """CON CONFIRM ORDER
 1. Confirm Order
 2. Cancel Order
 0. Back"""
 
+
     # --------------------------------------------------
-    # POPCORN FINAL
+    # POPCORN PRESET QUANTITY
     # --------------------------------------------------
 
-    if len(parts) >= 8 and parts[:2] == ["1", "1"]:
+    if (
+        len(parts) == 4
+        and parts[:2] == ["1", "1"]
+        and parts[2] in ["1", "2", "3"]
+        and parts[3] in ["1", "2", "3"]
+    ):
 
-        confirmation = parts[-1]
+        return """CON CUSTOMER DETAILS
+Enter your full name:"""
 
-        if confirmation == "2":
+
+    # --------------------------------------------------
+    # POPCORN PRESET NAME
+    # --------------------------------------------------
+
+    if (
+        len(parts) == 5
+        and parts[:2] == ["1", "1"]
+        and parts[2] in ["1", "2", "3"]
+    ):
+
+        return """CON CUSTOMER DETAILS
+Enter your phone number:"""
+
+
+    # --------------------------------------------------
+    # POPCORN PRESET PHONE
+    # --------------------------------------------------
+
+    if (
+        len(parts) == 6
+        and parts[:2] == ["1", "1"]
+        and parts[2] in ["1", "2", "3"]
+    ):
+
+        return """CON CONFIRM ORDER
+1. Confirm Order
+2. Cancel Order
+0. Back"""
+
+
+    # --------------------------------------------------
+    # POPCORN FINAL CONFIRMATION
+    # --------------------------------------------------
+
+    if len(parts) >= 7 and parts[:2] == ["1", "1"]:
+
+        if parts[-1] == "2":
             return """END ORDER CANCELLED.
 
 Thank you for choosing Pop & Sip."""
 
-        if confirmation == "1":
+        if parts[-1] == "1":
 
             product_choice = parts[2]
 
@@ -272,63 +324,46 @@ Thank you for choosing Pop & Sip."""
                 "3": 25
             }
 
-            product_names = {
+            names = {
                 "1": "Plain Popcorn",
                 "2": "Flavoured Popcorn",
                 "3": "Assorted Popcorn"
             }
 
-            if product_choice not in prices:
-                return """END Invalid order."""
-
             price = prices[product_choice]
-            product = product_names[product_choice]
+            product = names[product_choice]
 
-            # Preset quantity
-            if parts[3] in ["1", "2", "3"]:
-                quantity = int(parts[3])
-                name = parts[4]
-                phone = parts[5]
-
-            # Custom quantity
-            elif parts[3] == "4":
-                try:
-                    quantity = int(parts[4])
-                except ValueError:
-                    return """END Invalid quantity."""
-
-                name = parts[5]
-                phone = parts[6]
-
+            if parts[3] == "4":
+                quantity = int(parts[4])
+                name_index = 5
+                phone_index = 6
             else:
-                return """END Invalid order."""
+                quantity = int(parts[3])
+                name_index = 4
+                phone_index = 5
+
+            customer_name = parts[name_index]
+            customer_phone = parts[phone_index]
 
             total = price * quantity
 
             try:
                 order_number = save_order(
-                    name,
-                    phone,
                     product,
                     quantity,
-                    total
+                    total,
+                    customer_name,
+                    customer_phone
                 )
-            except Exception as e:
-                print("DATABASE ERROR:", e)
 
-                return """END Sorry, your order could not be saved.
+                return f"""END ORDER CONFIRMED!
 
-Please try again."""
-
-            return f"""END ORDER CONFIRMED!
-
-Order No: {order_number}
-
-Thank you for ordering from Pop & Sip.
-
+Order: {order_number}
 Product: {product}
 Quantity: {quantity}
 Total: GH¢{total}
+
+Thank you for ordering from Pop & Sip.
 
 PAYMENT
 
@@ -343,11 +378,18 @@ your order.
 
 WhatsApp: 0595529279"""
 
+            except Exception:
+                return """END Your order was received,
+but there was a database error.
+
+Please contact Pop & Sip on WhatsApp:
+0595529279"""
+
+
     # ==================================================
-    # HIBISCUS
+    # HIBISCUS DRINK
     # ==================================================
 
-    # Hibiscus menu
     if parts == ["1", "2"]:
         return """CON HIBISCUS DRINK
 GH¢5 per bottle
@@ -359,15 +401,20 @@ SELECT QUANTITY
 4. Choose Quantity
 0. Back"""
 
-    # Back from hibiscus
+
+    # --------------------------------------------------
+    # HIBISCUS BACK
+    # --------------------------------------------------
+
     if parts == ["1", "2", "0"]:
         return """CON PLACE ORDER
 1. Popcorn
 2. Hibiscus Drink
 0. Back"""
 
+
     # --------------------------------------------------
-    # HIBISCUS PRESET
+    # HIBISCUS PRESET QUANTITY
     # --------------------------------------------------
 
     if (
@@ -375,11 +422,13 @@ SELECT QUANTITY
         and parts[:2] == ["1", "2"]
         and parts[2] in ["1", "2", "3"]
     ):
+
         return """CON CUSTOMER DETAILS
 Enter your full name:"""
 
+
     # --------------------------------------------------
-    # HIBISCUS CUSTOM
+    # HIBISCUS CUSTOM QUANTITY
     # --------------------------------------------------
 
     if parts == ["1", "2", "4"]:
@@ -388,11 +437,15 @@ Enter the number of bottles you want.
 Example: 7
 0. Back"""
 
+
     # --------------------------------------------------
-    # HIBISCUS CUSTOM QUANTITY
+    # HIBISCUS CUSTOM QUANTITY ENTERED
     # --------------------------------------------------
 
-    if len(parts) == 4 and parts[:3] == ["1", "2", "4"]:
+    if (
+        len(parts) == 4
+        and parts[:3] == ["1", "2", "4"]
+    ):
 
         try:
             quantity = int(parts[3])
@@ -410,8 +463,9 @@ Example: 7"""
         return """CON CUSTOMER DETAILS
 Enter your full name:"""
 
+
     # --------------------------------------------------
-    # HIBISCUS PHONE
+    # HIBISCUS PRESET NAME
     # --------------------------------------------------
 
     if (
@@ -419,16 +473,13 @@ Enter your full name:"""
         and parts[:2] == ["1", "2"]
         and parts[2] in ["1", "2", "3"]
     ):
+
         return """CON CUSTOMER DETAILS
 Enter your phone number:"""
 
-    # Custom quantity -> phone
-    if len(parts) == 5 and parts[:3] == ["1", "2", "4"]:
-        return """CON CUSTOMER DETAILS
-Enter your phone number:"""
 
     # --------------------------------------------------
-    # HIBISCUS CONFIRMATION
+    # HIBISCUS PRESET PHONE
     # --------------------------------------------------
 
     if (
@@ -436,87 +487,85 @@ Enter your phone number:"""
         and parts[:2] == ["1", "2"]
         and parts[2] in ["1", "2", "3"]
     ):
+
         return """CON CONFIRM ORDER
 1. Confirm Order
 2. Cancel Order
 0. Back"""
 
-    if len(parts) == 6 and parts[:3] == ["1", "2", "4"]:
-        return """CON CONFIRM ORDER
-1. Confirm Order
-2. Cancel Order
-0. Back"""
 
     # --------------------------------------------------
-    # HIBISCUS FINAL
+    # HIBISCUS CUSTOM NAME
+    # --------------------------------------------------
+
+    if (
+        len(parts) == 5
+        and parts[:3] == ["1", "2", "4"]
+    ):
+
+        return """CON CUSTOMER DETAILS
+Enter your phone number:"""
+
+
+    # --------------------------------------------------
+    # HIBISCUS CUSTOM PHONE
+    # --------------------------------------------------
+
+    if (
+        len(parts) == 6
+        and parts[:3] == ["1", "2", "4"]
+    ):
+
+        return """CON CONFIRM ORDER
+1. Confirm Order
+2. Cancel Order
+0. Back"""
+
+
+    # --------------------------------------------------
+    # HIBISCUS FINAL CONFIRMATION
     # --------------------------------------------------
 
     if len(parts) >= 6 and parts[:2] == ["1", "2"]:
 
-        confirmation = parts[-1]
-
-        if confirmation == "2":
+        if parts[-1] == "2":
             return """END ORDER CANCELLED.
 
 Thank you for choosing Pop & Sip."""
 
-        if confirmation == "1":
-
-            # Preset quantity
-            if parts[2] in ["1", "2", "3"]:
-
-                quantity = int(parts[2])
-
-                # parts:
-                # 1, 2, quantity, name, phone, confirmation
-
-                name = parts[3]
-                phone = parts[4]
-
-            # Custom quantity
-            elif parts[2] == "4":
-
-                try:
-                    quantity = int(parts[3])
-                except ValueError:
-                    return """END Invalid quantity."""
-
-                # parts:
-                # 1, 2, 4, quantity, name, phone, confirmation
-
-                name = parts[4]
-                phone = parts[5]
-
-            else:
-                return """END Invalid order."""
+        if parts[-1] == "1":
 
             product = "Hibiscus Drink"
-            total = quantity * 5
+            price = 5
+
+            if parts[2] == "4":
+                quantity = int(parts[3])
+                customer_name = parts[4]
+                customer_phone = parts[5]
+            else:
+                quantity = int(parts[2])
+                customer_name = parts[3]
+                customer_phone = parts[4]
+
+            total = price * quantity
 
             try:
                 order_number = save_order(
-                    name,
-                    phone,
                     product,
                     quantity,
-                    total
+                    total,
+                    customer_name,
+                    customer_phone
                 )
-            except Exception as e:
-                print("DATABASE ERROR:", e)
 
-                return """END Sorry, your order could not be saved.
+                return f"""END ORDER CONFIRMED!
 
-Please try again."""
-
-            return f"""END ORDER CONFIRMED!
-
-Order No: {order_number}
-
-Thank you for ordering from Pop & Sip.
-
+Order: {order_number}
 Product: {product}
 Quantity: {quantity}
 Total: GH¢{total}
+
+Thank you for ordering from Pop & Sip.
 
 PAYMENT
 
@@ -531,8 +580,16 @@ your order.
 
 WhatsApp: 0595529279"""
 
+            except Exception:
+                return """END Your order was received,
+but there was a database error.
+
+Please contact Pop & Sip on WhatsApp:
+0595529279"""
+
+
     # --------------------------------------------------
-    # INVALID
+    # INVALID OPTION
     # --------------------------------------------------
 
     return """END Sorry, something went wrong.
@@ -542,170 +599,146 @@ again and try again."""
 
 
 # ==================================================
-# ORDER DASHBOARD
+# ADMIN DASHBOARD
 # ==================================================
 
-@app.route("/orders", methods=["GET"])
+@app.route("/orders")
 def orders():
 
-    # Password protection
     password = request.args.get("password", "")
 
-    if not ADMIN_PASSWORD:
-        return "ADMIN_PASSWORD has not been configured on Render.", 500
-
-    if password != ADMIN_PASSWORD:
+    if not ADMIN_PASSWORD or password != ADMIN_PASSWORD:
         return """
-        <h2>Pop & Sip Orders</h2>
-        <form method="get">
-            <p>Enter admin password:</p>
-            <input type="password" name="password">
-            <button type="submit">View Orders</button>
-        </form>
+        <html>
+        <head>
+            <title>Pop & Sip Admin</title>
+        </head>
+        <body>
+            <h2>Pop & Sip Admin</h2>
+            <form method="get">
+                <input type="password"
+                       name="password"
+                       placeholder="Admin Password"
+                       required>
+                <button type="submit">Login</button>
+            </form>
+        </body>
+        </html>
         """
 
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT
-            order_number,
-            customer_name,
-            phone,
-            product,
-            quantity,
-            total,
-            created_at
+        SELECT order_number, product, quantity, total,
+               customer_name, customer_phone, created_at
         FROM orders
         ORDER BY created_at DESC
     """)
 
-    orders_data = cur.fetchall()
+    orders = cur.fetchall()
 
     cur.close()
     conn.close()
 
-    rows = ""
-
-    for order in orders_data:
-
-        order_number = order[0]
-        name = order[1]
-        phone = order[2]
-        product = order[3]
-        quantity = order[4]
-        total = order[5]
-        created_at = order[6]
-
-        rows += f"""
-        <tr>
-            <td>{order_number}</td>
-            <td>{name}</td>
-            <td>{phone}</td>
-            <td>{product}</td>
-            <td>{quantity}</td>
-            <td>GH¢{total}</td>
-            <td>{created_at}</td>
-        </tr>
-        """
-
-    html = f"""
-    <!DOCTYPE html>
+    html = """
     <html>
     <head>
         <title>Pop & Sip Orders</title>
-
-        <meta name="viewport"
-              content="width=device-width, initial-scale=1">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
 
         <style>
-
-            body {{
+            body {
                 font-family: Arial, sans-serif;
-                margin: 0;
-                padding: 20px;
+                margin: 20px;
                 background: #f5f5f5;
-            }}
+            }
 
-            h1 {{
+            h1 {
                 text-align: center;
-            }}
+            }
 
-            .table-container {{
-                overflow-x: auto;
+            .order {
                 background: white;
-                padding: 10px;
+                padding: 15px;
+                margin-bottom: 15px;
                 border-radius: 10px;
-            }}
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            }
 
-            table {{
-                width: 100%;
-                border-collapse: collapse;
-                min-width: 850px;
-            }}
+            .order-number {
+                font-size: 20px;
+                font-weight: bold;
+            }
 
-            th, td {{
-                padding: 12px;
-                border-bottom: 1px solid #ddd;
-                text-align: left;
-            }}
-
-            th {{
-                background: #111;
-                color: white;
-            }}
-
-            tr:hover {{
-                background: #f1f1f1;
-            }}
-
+            .total {
+                font-size: 18px;
+                font-weight: bold;
+            }
         </style>
     </head>
 
     <body>
 
-        <h1>POP & SIP ORDERS</h1>
+    <h1>POP & SIP ORDERS</h1>
+    """
 
-        <div class="table-container">
+    if not orders:
+        html += "<p>No orders yet.</p>"
 
-            <table>
+    for order in orders:
 
-                <tr>
-                    <th>Order</th>
-                    <th>Customer</th>
-                    <th>Phone</th>
-                    <th>Product</th>
-                    <th>Quantity</th>
-                    <th>Total</th>
-                    <th>Date / Time</th>
-                </tr>
+        order_number = order[0]
+        product = order[1]
+        quantity = order[2]
+        total = order[3]
+        customer_name = order[4]
+        customer_phone = order[5]
+        created_at = order[6]
 
-                {rows}
+        html += f"""
+        <div class="order">
 
-            </table>
+            <div class="order-number">
+                {order_number}
+            </div>
+
+            <p>
+                <strong>Product:</strong> {product}<br>
+                <strong>Quantity:</strong> {quantity}<br>
+                <strong>Customer:</strong> {customer_name}<br>
+                <strong>Phone:</strong> {customer_phone}
+            </p>
+
+            <div class="total">
+                Total: GH¢{total}
+            </div>
+
+            <p>
+                <strong>Date:</strong> {created_at}
+            </p>
 
         </div>
+        """
 
+    html += """
     </body>
     </html>
     """
 
-    return Response(html, mimetype="text/html")
+    return html
 
 
-# ==================================================
+# --------------------------------------------------
 # START SERVER
-# ==================================================
+# --------------------------------------------------
 
 if __name__ == "__main__":
 
     try:
-        setup_database()
+        create_table()
         print("Database ready.")
     except Exception as e:
-        print("DATABASE SETUP ERROR:", e)
+        print("Database error:", e)
 
-    app.run(
-        host="0.0.0.0",
-        port=10000
-    )
+    app.run(host="0.0.0.0", port=10000)
