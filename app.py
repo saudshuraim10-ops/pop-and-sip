@@ -1,9 +1,9 @@
-from flask import Flask, request, session, redirect, url_for
+from flask import Flask, request
 import os
 import psycopg2
-from datetime import datetime
 
 app = Flask(__name__)
+
 app.secret_key = os.environ.get("SECRET_KEY", "pop-and-sip-secret")
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -15,6 +15,9 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 # --------------------------------------------------
 
 def get_db():
+    if not DATABASE_URL:
+        raise Exception("DATABASE_URL environment variable is missing")
+
     return psycopg2.connect(DATABASE_URL)
 
 
@@ -41,6 +44,7 @@ def create_table():
 
 
 def save_order(product, quantity, total, customer_name, customer_phone):
+
     conn = get_db()
     cur = conn.cursor()
 
@@ -50,11 +54,13 @@ def save_order(product, quantity, total, customer_name, customer_phone):
     """)
 
     next_number = cur.fetchone()[0]
+
     order_number = f"PS-{next_number:05d}"
 
     cur.execute("""
         INSERT INTO orders
-        (order_number, product, quantity, total, customer_name, customer_phone)
+        (order_number, product, quantity, total,
+         customer_name, customer_phone)
         VALUES (%s, %s, %s, %s, %s, %s)
     """, (
         order_number,
@@ -66,6 +72,7 @@ def save_order(product, quantity, total, customer_name, customer_phone):
     ))
 
     conn.commit()
+
     cur.close()
     conn.close()
 
@@ -80,9 +87,9 @@ def save_order(product, quantity, total, customer_name, customer_phone):
 def ussd():
 
     text = request.form.get("text", "").strip()
-    session_id = request.form.get("sessionId", "")
 
     parts = text.split("*") if text else []
+
 
     # --------------------------------------------------
     # FIRST SCREEN
@@ -137,7 +144,10 @@ WhatsApp: 0595529279"""
 0. Back"""
 
 
-    # Back from popcorn
+    # --------------------------------------------------
+    # BACK FROM POPCORN
+    # --------------------------------------------------
+
     if parts == ["1", "1", "0"]:
         return """CON PLACE ORDER
 1. Popcorn
@@ -182,7 +192,7 @@ WhatsApp: 0595529279"""
 
 
     # --------------------------------------------------
-    # POPCORN CUSTOM QUANTITY
+    # POPCORN CUSTOM QUANTITY PROMPT
     # --------------------------------------------------
 
     if (
@@ -310,9 +320,11 @@ Enter your phone number:"""
     if len(parts) >= 7 and parts[:2] == ["1", "1"]:
 
         if parts[-1] == "2":
+
             return """END ORDER CANCELLED.
 
 Thank you for choosing Pop & Sip."""
+
 
         if parts[-1] == "1":
 
@@ -333,21 +345,25 @@ Thank you for choosing Pop & Sip."""
             price = prices[product_choice]
             product = names[product_choice]
 
-            if parts[3] == "4":
-                quantity = int(parts[4])
-                name_index = 5
-                phone_index = 6
-            else:
-                quantity = int(parts[3])
-                name_index = 4
-                phone_index = 5
-
-            customer_name = parts[name_index]
-            customer_phone = parts[phone_index]
-
-            total = price * quantity
-
             try:
+
+                if parts[3] == "4":
+
+                    quantity = int(parts[4])
+                    name_index = 5
+                    phone_index = 6
+
+                else:
+
+                    quantity = int(parts[3])
+                    name_index = 4
+                    phone_index = 5
+
+                customer_name = parts[name_index]
+                customer_phone = parts[phone_index]
+
+                total = price * quantity
+
                 order_number = save_order(
                     product,
                     quantity,
@@ -378,8 +394,11 @@ your order.
 
 WhatsApp: 0595529279"""
 
-            except Exception:
-                return """END Your order was received,
+            except Exception as e:
+
+                print("DATABASE ERROR:", repr(e))
+
+                return """END Your order was received
 but there was a database error.
 
 Please contact Pop & Sip on WhatsApp:
@@ -391,6 +410,7 @@ Please contact Pop & Sip on WhatsApp:
     # ==================================================
 
     if parts == ["1", "2"]:
+
         return """CON HIBISCUS DRINK
 GH¢5 per bottle
 
@@ -403,10 +423,11 @@ SELECT QUANTITY
 
 
     # --------------------------------------------------
-    # HIBISCUS BACK
+    # BACK FROM HIBISCUS
     # --------------------------------------------------
 
     if parts == ["1", "2", "0"]:
+
         return """CON PLACE ORDER
 1. Popcorn
 2. Hibiscus Drink
@@ -432,6 +453,7 @@ Enter your full name:"""
     # --------------------------------------------------
 
     if parts == ["1", "2", "4"]:
+
         return """CON CHOOSE QUANTITY
 Enter the number of bottles you want.
 Example: 7
@@ -448,6 +470,7 @@ Example: 7
     ):
 
         try:
+
             quantity = int(parts[3])
 
             if quantity <= 0:
@@ -456,6 +479,7 @@ Enter a number greater than 0.
 Example: 7"""
 
         except ValueError:
+
             return """CON CHOOSE QUANTITY
 Please enter a valid number.
 Example: 7"""
@@ -529,27 +553,33 @@ Enter your phone number:"""
     if len(parts) >= 6 and parts[:2] == ["1", "2"]:
 
         if parts[-1] == "2":
+
             return """END ORDER CANCELLED.
 
 Thank you for choosing Pop & Sip."""
+
 
         if parts[-1] == "1":
 
             product = "Hibiscus Drink"
             price = 5
 
-            if parts[2] == "4":
-                quantity = int(parts[3])
-                customer_name = parts[4]
-                customer_phone = parts[5]
-            else:
-                quantity = int(parts[2])
-                customer_name = parts[3]
-                customer_phone = parts[4]
-
-            total = price * quantity
-
             try:
+
+                if parts[2] == "4":
+
+                    quantity = int(parts[3])
+                    customer_name = parts[4]
+                    customer_phone = parts[5]
+
+                else:
+
+                    quantity = int(parts[2])
+                    customer_name = parts[3]
+                    customer_phone = parts[4]
+
+                total = price * quantity
+
                 order_number = save_order(
                     product,
                     quantity,
@@ -580,8 +610,11 @@ your order.
 
 WhatsApp: 0595529279"""
 
-            except Exception:
-                return """END Your order was received,
+            except Exception as e:
+
+                print("DATABASE ERROR:", repr(e))
+
+                return """END Your order was received
 but there was a database error.
 
 Please contact Pop & Sip on WhatsApp:
@@ -608,46 +641,84 @@ def orders():
     password = request.args.get("password", "")
 
     if not ADMIN_PASSWORD or password != ADMIN_PASSWORD:
+
         return """
         <html>
         <head>
             <title>Pop & Sip Admin</title>
         </head>
+
         <body>
+
             <h2>Pop & Sip Admin</h2>
+
             <form method="get">
-                <input type="password"
-                       name="password"
-                       placeholder="Admin Password"
-                       required>
-                <button type="submit">Login</button>
+
+                <input
+                    type="password"
+                    name="password"
+                    placeholder="Admin Password"
+                    required
+                >
+
+                <button type="submit">
+                    Login
+                </button>
+
             </form>
+
         </body>
         </html>
         """
 
-    conn = get_db()
-    cur = conn.cursor()
 
-    cur.execute("""
-        SELECT order_number, product, quantity, total,
-               customer_name, customer_phone, created_at
-        FROM orders
-        ORDER BY created_at DESC
-    """)
+    try:
 
-    orders = cur.fetchall()
+        conn = get_db()
+        cur = conn.cursor()
 
-    cur.close()
-    conn.close()
+        cur.execute("""
+            SELECT
+                order_number,
+                product,
+                quantity,
+                total,
+                customer_name,
+                customer_phone,
+                created_at
+            FROM orders
+            ORDER BY created_at DESC
+        """)
+
+        orders = cur.fetchall()
+
+        cur.close()
+        conn.close()
+
+    except Exception as e:
+
+        print("ADMIN DATABASE ERROR:", repr(e))
+
+        return """
+        <h2>Database Error</h2>
+        <p>Could not connect to the orders database.</p>
+        """
+
 
     html = """
     <html>
+
     <head>
+
         <title>Pop & Sip Orders</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
+
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1"
+        >
 
         <style>
+
             body {
                 font-family: Arial, sans-serif;
                 margin: 20px;
@@ -663,7 +734,8 @@ def orders():
                 padding: 15px;
                 margin-bottom: 15px;
                 border-radius: 10px;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                box-shadow:
+                    0 2px 8px rgba(0,0,0,0.1);
             }
 
             .order-number {
@@ -675,16 +747,21 @@ def orders():
                 font-size: 18px;
                 font-weight: bold;
             }
+
         </style>
+
     </head>
 
     <body>
 
-    <h1>POP & SIP ORDERS</h1>
+        <h1>POP & SIP ORDERS</h1>
     """
 
+
     if not orders:
+
         html += "<p>No orders yet.</p>"
+
 
     for order in orders:
 
@@ -697,6 +774,7 @@ def orders():
         created_at = order[6]
 
         html += f"""
+
         <div class="order">
 
             <div class="order-number">
@@ -704,10 +782,25 @@ def orders():
             </div>
 
             <p>
-                <strong>Product:</strong> {product}<br>
-                <strong>Quantity:</strong> {quantity}<br>
-                <strong>Customer:</strong> {customer_name}<br>
-                <strong>Phone:</strong> {customer_phone}
+
+                <strong>Product:</strong>
+                {product}
+
+                <br>
+
+                <strong>Quantity:</strong>
+                {quantity}
+
+                <br>
+
+                <strong>Customer:</strong>
+                {customer_name}
+
+                <br>
+
+                <strong>Phone:</strong>
+                {customer_phone}
+
             </p>
 
             <div class="total">
@@ -715,11 +808,16 @@ def orders():
             </div>
 
             <p>
-                <strong>Date:</strong> {created_at}
+
+                <strong>Date:</strong>
+                {created_at}
+
             </p>
 
         </div>
+
         """
+
 
     html += """
     </body>
@@ -736,9 +834,16 @@ def orders():
 if __name__ == "__main__":
 
     try:
-        create_table()
-        print("Database ready.")
-    except Exception as e:
-        print("Database error:", e)
 
-    app.run(host="0.0.0.0", port=10000)
+        create_table()
+
+        print("Database ready.")
+
+    except Exception as e:
+
+        print("DATABASE STARTUP ERROR:", repr(e))
+
+    app.run(
+        host="0.0.0.0",
+        port=10000
+    )
