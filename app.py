@@ -16,10 +16,8 @@ def ussd():
     # =========================
     # MAIN MENU
     # =========================
-    if text == "":
-        return """CON POP & SIP
-1. Popcorn
-2. Hibiscus Drink
+if text == "":
+    return """CON POP & SIP
 3. Place Order
 4. Contact Us"""
     # =========================
